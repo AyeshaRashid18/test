@@ -1,0 +1,862 @@
+install.packages("formattable")
+		
+
+		library(tidyverse)
+		library(dplyr)
+		library(plotly)
+		library(data.table)
+		library(formattable)
+		
+		
+
+		#import MSD file and trim.  Make sure MSD file is saved in working directory.
+		DF1<-read_tsv("MER_Structured_Datasets_PSNU_IM_FY19-22_20210917_v2_1.txt",
+		
+
+		              col_types = cols(.default = "c",
+		                               targets	= "d",
+		                               qtr1	= "d",
+		                               qtr2	= "d",
+		                               qtr3	= "d",
+		                               qtr4	= "d",
+		                               cumulative = "d"))
+		glimpse(DF1)
+		
+
+		#trim to variables and indicators needed to reduce size
+		DF2<-DF1 %>%
+		  select(operatingunit, snu1, psnu, snuprioritization, fundingagency, mech_code, mech_name,
+		         indicator, numeratordenom, standardizeddisaggregate, ageasentered, otherdisaggregate, 
+		         otherdisaggregate_sub, fiscal_year, targets, qtr1, qtr2, qtr3, qtr4, cumulative) %>%
+		  filter(indicator %in% c("TX_PVLS", "TX_CURR", "TX_NET_NEW", "PMTCT_ART", "PMTCT_EID", "PMTCT_HEI_POS"))
+		
+
+		glimpse(DF2)
+		
+
+		#this file below is useful for checking disaggs in case you need to update DF3
+		view(count(DF2,indicator, standardizeddisaggregate, otherdisaggregate, mech_code, mech_name))
+		
+
+		# after looking at disaggs above, trim to what disags are needed
+		DF3<-DF2 %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "KeyPop/Indication/HIVStatus", "PregnantOrBreastfeeding/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus", "KeyPop/HIVStatus", 
+		                                         "Age/NewExistingArt/Sex/HIVStatus", "Total Denominator", "Total Numerator",
+		                                         "Age","Age/HIVStatus", "Age/HIVStatus/ARTStatus"),
+		         fiscal_year %in% c(2020, 2021))
+		
+
+		
+
+		glimpse(DF3)
+		
+
+		# this file is useful to check disaggs for rest of analysis in case you need to modify code
+		view(count(DF3,indicator, standardizeddisaggregate, otherdisaggregate, mech_code, mech_name,fiscal_year))
+		
+
+		# transforming numeric variables for FY20 (long -> wide)
+		DF3_20<-DF3 %>% 
+		  filter(fiscal_year %in% c("2020")) %>% 
+		  gather(period,val,colnames(select_if(., (is.numeric)))) %>% 
+		  mutate(newperiod = paste(indicator,numeratordenom, fiscal_year, period,  sep="_")) %>% 
+		  group_by(operatingunit, snu1, psnu, snuprioritization, fundingagency, mech_code, mech_name, numeratordenom, 
+		           standardizeddisaggregate, ageasentered, otherdisaggregate, otherdisaggregate_sub, newperiod) %>% 
+		  summarize_at(vars(val),sum,na.rm=TRUE) %>% 
+		  ungroup() %>% 
+		  spread(newperiod, val)
+		
+
+		glimpse(DF3_20)
+		
+
+		# transforming numeric variables for FY21 (long -> wide)
+		DF3_21<-DF3 %>% 
+		  filter(fiscal_year %in% c("2021")) %>% 
+		  gather(period,val,colnames(select_if(., (is.numeric)))) %>% 
+		  mutate(newperiod = paste(indicator,numeratordenom, fiscal_year,period, sep="_")) %>% 
+		  group_by(operatingunit, snu1, psnu, snuprioritization, fundingagency, mech_code, mech_name, numeratordenom, 
+		           standardizeddisaggregate, ageasentered, otherdisaggregate, otherdisaggregate_sub, newperiod) %>% 
+		  summarize_at(vars(val),sum,na.rm=TRUE) %>% 
+		  ungroup() %>% 
+		  spread(newperiod, val)
+		
+
+		glimpse(DF3_21)
+		
+
+		# removing unneeded transformed variables
+		DF3_21_TRIMMED<-DF3_21 %>%
+		  select(-c(PMTCT_ART_D_2021_qtr4,
+		            PMTCT_ART_N_2021_qtr4,
+		            TX_CURR_N_2021_qtr4,
+		            TX_PVLS_D_2021_qtr4,
+		            TX_PVLS_N_2021_qtr4,
+		            TX_NET_NEW_N_2021_qtr4))
+		
+
+		glimpse(DF3_21_TRIMMED)
+		
+
+		# joining datasets, starting with needed variables and distinct rows - then full joining transformed data. 
+		# full join: return all rows and all columns from both x and y. Where there are not matching values, returns NA for the one missing.
+		DF3_DISTINCT<-DF3%>%
+		  select(operatingunit,snu1, psnu, snuprioritization, fundingagency, mech_code, mech_name,
+		         standardizeddisaggregate, ageasentered, otherdisaggregate, otherdisaggregate_sub)%>%
+		  distinct()
+	
+
+		DF3_finala<-full_join(DF3_DISTINCT, DF3_20)
+		
+
+		DF3_finalb<-full_join(DF3_finala, DF3_21_TRIMMED)
+		
+
+		glimpse(DF3_finalb)
+		
+
+		#
+		#
+		#
+		#
+		#***** DF3_finalb is the main DF you will use for rest of visuals ******
+		#
+		#
+		#
+		#
+		
+
+		
+
+		
+
+		#creatE %notin% function for ease in excluding variables
+		"%notin%" <- Negate("%in%")
+		
+		
+
+		#****DUMBBELL PLOT 1 VLC All populations****
+		#*
+		#*
+		#*
+		#*
+		#First: Filter disaggs needed first
+		dumbbell_vlc_allpop <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"),
+		         mech_code %notin% "16772")
+		
+
+		#second: make summary table for plot; QC summary table against Pano
+		dumbell_vlc2_allpop<-dumbbell_vlc_allpop %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q2=sum(TX_PVLS_D_2021_qtr2,na.rm = TRUE),
+		            TX_PVLS_D_2021_Q3=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            TX_CURR_N_2020_Q4=sum(TX_CURR_N_2020_qtr4,na.rm = TRUE),
+		            TX_CURR_N_2021_Q1=sum(TX_CURR_N_2021_qtr1,na.rm = TRUE))%>%
+		  mutate(
+		    VLC_FY21_Q3 = TX_PVLS_D_2021_Q3/TX_CURR_N_2021_Q1,
+		    VLC_FY21_Q2 = TX_PVLS_D_2021_Q2/TX_CURR_N_2020_Q4)
+		
+
+		# third: order by VLC last quarter highest 
+		dumbell_vlc2_allpop$operatingunit<- factor(dumbell_vlc2_allpop$operatingunit,
+		                                      levels = dumbell_vlc2_allpop$operatingunit[order(dumbell_vlc2_allpop$VLC_FY21_Q3)])
+			
+
+		# fourth: run plot 
+		fig1 <- plot_ly(dumbell_vlc2_allpop, color = I("gray80"))
+		fig1 <- fig1 %>% add_segments(x = ~VLC_FY21_Q2, xend = ~VLC_FY21_Q3, y = ~operatingunit, yend = ~operatingunit,
+		                            showlegend = FALSE)
+		fig1 <- fig1 %>% add_lines(x = 0.80, y=~operatingunit, name = "VLC Target", color = I("lightgray"), linetype = I("dot"))
+		fig1 <- fig1 %>% add_markers(x = ~VLC_FY21_Q2, y = ~operatingunit, name = "FY21 Q2", color = I("cornflowerblue"))
+		fig1 <- fig1 %>% add_markers(x = ~VLC_FY21_Q3, y = ~operatingunit, name = "FY21 Q3", color = I("blue4"))
+		fig1 <- fig1 %>% layout(
+		  title = "Viral Load Coverage Current Qtr vs. Last Qtr",
+		  xaxis = list(title = "Viral Load Coverage",tickformat = "%"),
+		  yaxis = list(title = ""),
+		  margin = list(l = 65)
+		)
+		
+		
+
+		fig1
+	
+		
+
+		#dumbbell comparison table - VLC ALL Pop; this table helps with notes for the dumbbell chart.
+		dumbell_vlc2_allpop_comparison<-dumbell_vlc2_allpop %>% 
+		  mutate(
+		    Difference_VLC = VLC_FY21_Q3 - VLC_FY21_Q2)
+		
+
+		write.csv(dumbell_vlc2_allpop_comparison,"VLC_Difference_Table_AllPOP_FY21Q3clean.csv")
+		view(dumbell_vlc2_allpop_comparison)
+		
+
+		#****DUMBBELL PLOT 2 VLC <15****
+		#*
+		#*
+		#*
+		#*
+		#First: Filter disaggs needed first; remove OUs with 0% VLC.
+		dumbbell_vlc1_lessthan15 <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"),
+		         mech_code %notin% "16772", 
+		         ageasentered %in% c("<01", "<10", "<15", "01-04", "05-09", "10-14"))
+		
+
+		#second: make summary table for plot; QC summary table against Pano
+		dumbbell_vlc2_lessthan15<-dumbbell_vlc1_lessthan15 %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q2=sum(TX_PVLS_D_2021_qtr2,na.rm = TRUE),
+		            TX_PVLS_D_2021_Q3=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            TX_CURR_N_2020_Q4=sum(TX_CURR_N_2020_qtr4,na.rm = TRUE),
+		            TX_CURR_N_2021_Q1=sum(TX_CURR_N_2021_qtr1,na.rm = TRUE))%>%
+		  mutate(
+		    VLC_FY21_Q3 = TX_PVLS_D_2021_Q3/TX_CURR_N_2021_Q1,
+		    VLC_FY21_Q2 = TX_PVLS_D_2021_Q2/TX_CURR_N_2020_Q4)
+		
+
+		# third: order by VLC last quarter highest 
+		dumbbell_vlc2_lessthan15$operatingunit<- factor(dumbbell_vlc2_lessthan15$operatingunit,
+		                                           levels = dumbbell_vlc2_lessthan15$operatingunit[order(dumbbell_vlc2_lessthan15$VLC_FY21_Q3)])
+		
+
+		
+
+		# fourth: run plot 
+		fig2 <- plot_ly(dumbbell_vlc2_lessthan15, color = I("gray80"))
+		fig2 <- fig2 %>% add_segments(x = ~VLC_FY21_Q2, xend = ~VLC_FY21_Q3, y = ~operatingunit, yend = ~operatingunit,
+		                            showlegend = FALSE)
+		fig2 <- fig2 %>% add_lines(x = 0.80, y=~operatingunit, name = "VLC Target", color = I("lightgray"), linetype = I("dot"))
+		fig2 <- fig2 %>% add_markers(x = ~VLC_FY21_Q2, y = ~operatingunit, name = "FY21 Q2", color = I("SkyBlue"))
+		fig2 <- fig2 %>% add_markers(x = ~VLC_FY21_Q3, y = ~operatingunit, name = "FY21 Q3", color = I("DarkBlue"))
+		fig2 <- fig2 %>% layout(
+		  title = "Viral Load Coverage Current Qtr vs. Last Qtr, <15",
+		  xaxis = list(title = "Viral Load Coverage", tickformat = "%"),
+		  yaxis = list(title = ""),
+		  margin = list(l = 65)
+		)
+		
+
+		fig2
+		
+
+		
+
+		#dumbbell comparison table - VLC <15; this table helps with notes for the dumbbell chart.
+		dumbbell_vlc2_lessthan15_comparison<-dumbbell_vlc2_lessthan15 %>% 
+		  mutate(
+		    Difference_VLC = VLC_FY21_Q3 - VLC_FY21_Q2
+		  )
+		
+
+		write.csv(dumbbell_vlc2_lessthan15_comparison,"VLC_Difference_Table_lt15_FY21Q3clean.csv")
+		view(dumbbell_vlc2_lessthan15_comparison)
+		
+
+		#****DUMBBELL PLOT 3 VLS All Pop****
+		#*
+		#*
+		#*
+		#*
+		#First: Filter disaggs needed first; remove OUs with 0% VLC
+		dumbbell_vls1_allpop <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus"),
+		         mech_code %notin% "16772") 
+		
+
+		#second: make summary table for plot; QC summary table against Pano
+		dumbbell_vls2_allpop<-dumbbell_vls1_allpop %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_N_2021_Q2=sum(TX_PVLS_N_2021_qtr2,na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE),
+		            TX_PVLS_D_2021_Q2=sum(TX_PVLS_D_2021_qtr2,na.rm = TRUE),
+		            TX_PVLS_D_2021_Q3=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		    VLS_FY21_Q2 = TX_PVLS_N_2021_Q2/TX_PVLS_D_2021_Q2,
+		    VLS_FY21_Q3 = TX_PVLS_N_2021_Q3/TX_PVLS_D_2021_Q3)
+		
+
+		
+
+		# third: order by VLC last quarter highest (plot_ly() will pick up on this ordering)
+		dumbbell_vls2_allpop$operatingunit<- factor(dumbbell_vls2_allpop$operatingunit,
+		                                            levels = dumbbell_vls2_allpop$operatingunit[order(dumbbell_vls2_allpop$VLS_FY21_Q3)])
+		
+
+		
+
+		# fourth: run plot 
+		fig3 <- plot_ly(dumbbell_vls2_allpop, color = I("gray80"))
+		fig3 <- fig3 %>% add_segments(x = ~VLS_FY21_Q2, xend = ~VLS_FY21_Q3, y = ~operatingunit, yend = ~operatingunit,
+		                            showlegend = FALSE)
+		fig3 <- fig3 %>% add_lines(x = 0.95, y=~operatingunit, name = "VLS Target", color = I("lightgray"), linetype = I("dot"))
+		fig3 <- fig3 %>% add_markers(x = ~VLS_FY21_Q2, y = ~operatingunit, name = "FY21 Q2", color = I("LightCoral"))
+		fig3 <- fig3 %>% add_markers(x = ~VLS_FY21_Q3, y = ~operatingunit, name = "FY21 Q3", color = I("FireBrick"))
+		fig3 <- fig3 %>% layout(
+		  title = "Viral Suppression Current Qtr vs. Last Qtr",
+		  xaxis = list(title = "Viral Suppression", tickformat = "%"),
+		  yaxis = list(title = ""),
+		  margin = list(l = 65)
+		)
+		
+
+		fig3
+		
+
+		
+
+		
+
+		#dumbbell comparison table - VLS All pop
+		dumbbell_vls2_allpop_comparison<-dumbbell_vls2_allpop %>% 
+		  mutate(
+		    Difference_VLS = VLS_FY21_Q3 - VLS_FY21_Q2
+		  )
+		
+
+		write.csv(dumbbell_vls2_allpop_comparison,"VLS_Difference_Table_ALLPOP_FY21Q3clean.csv")
+		view(dumbbell_vls2_allpop_comparison)
+		
+
+	
+		#****DUMBBELL PLOT 4 VLS <15****
+		#*
+		#*
+		#*
+		#*
+		#First: Filter disaggs needed first; remove OUs with 0% VLC
+		dumbbell_vls1_lessthan15<- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"),
+		         mech_code %notin% "16772", 
+		         ageasentered %in% c("<01", "<10", "<15", "01-04", "05-09", "10-14"))
+		
+
+		#second: make summary table for plot; check values against pano
+		dumbbell_vls2_lessthan15<-dumbbell_vls1_lessthan15 %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_N_2021_Q2=sum(TX_PVLS_N_2021_qtr2,na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE),
+		            TX_PVLS_D_2021_Q2=sum(TX_PVLS_D_2021_qtr2,na.rm = TRUE),
+		            TX_PVLS_D_2021_Q3=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		    VLS_FY21_Q2 = TX_PVLS_N_2021_Q2/TX_PVLS_D_2021_Q2,
+		    VLS_FY21_Q3 = TX_PVLS_N_2021_Q3/TX_PVLS_D_2021_Q3)
+		
+
+		# third: order by VLC last quarter highest (plot_ly() will pick up on this ordering)
+		dumbbell_vls2_lessthan15$operatingunit<- factor(dumbbell_vls2_lessthan15$operatingunit,
+		                                                levels = dumbbell_vls2_lessthan15$operatingunit[order(dumbbell_vls2_lessthan15$VLS_FY21_Q3)])
+		
+		
+
+		# fourth: run plot 
+		fig4 <- plot_ly(dumbbell_vls2_lessthan15, color = I("gray80"))
+		fig4 <- fig4 %>% add_segments(x = ~VLS_FY21_Q2, xend = ~VLS_FY21_Q3, y = ~operatingunit, yend = ~operatingunit,
+		                            showlegend = FALSE)
+		fig4 <- fig4 %>% add_lines(x = 0.95, y=~operatingunit, name = "VLS Target", color = I("lightgray"), linetype = I("dot"))
+		fig4 <- fig4 %>% add_markers(x = ~VLS_FY21_Q2, y = ~operatingunit, name = "FY21 Q2", color = I("LightSalmon"))
+		fig4 <- fig4 %>% add_markers(x = ~VLS_FY21_Q3, y = ~operatingunit, name = "FY21 Q3", color = I("DarkRed"))
+		fig4 <- fig4 %>% layout(
+		  title = "Viral Suppression Current Qtr vs. Last Qtr, <15",
+		  xaxis = list(title = "Viral Suppression", tickformat = "%"),
+		  yaxis = list(title = ""),
+		  margin = list(l = 65))
+		
+
+		
+
+		fig4
+		
+
+		#dumbbell comparison table - VLS <15
+		dumbbell_vls2_lessthan15_comparison<-dumbbell_vls2_lessthan15 %>% 
+		  mutate(
+		    Difference_VLS = VLS_FY21_Q3 - VLS_FY21_Q2
+		  )
+		
+
+		write.csv(dumbbell_vls2_lessthan15_comparison,"VLS_Difference_Table_LT15_FY21Q3clean.csv")
+		view(dumbbell_vls2_lessthan15_comparison)
+
+	
+
+		#Global Key Metrics Summary - "Heat map" 
+		
+
+
+	
+
+		#First make DFs with needed disaggs. You will be able to use these DFs for other tables (e.g. Power Bi too). Will likely
+		#only need to filter out mech_code 16772 in Q2 data summary. 
+		
+
+		#all populations
+		KM_allpop <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"))
+		
+
+		#lessthan15
+		KM_lessthan15 <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"),
+		         ageasentered %in% c("<01", "<10", "<15", "01-04", "05-09", "10-14"))
+		
+
+		#Pregnant
+		KM_PGW<- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("PregnantOrBreastfeeding/Indication/HIVStatus", "Age/NewExistingArt/Sex/HIVStatus"),
+		         otherdisaggregate %in% c("Life-long ART, Already", "Pregnant, Routine", "Pregnant, Targeted"))
+		
+
+		#Breastfeeding
+		KM_BFW <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("PregnantOrBreastfeeding/Indication/HIVStatus"),
+		         otherdisaggregate %in% c("Life-long ART, Already", "Breastfeeding, Routine", "Breastfeeding, Targeted"))
+		
+
+		#Key Pops
+		KM_KP <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("KeyPop/Indication/HIVStatus", "KeyPop/HIVStatus"))
+		
+
+		
+
+		#EID 2 months coverage numerator
+		KM_EID2N <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% "Age",
+		         ageasentered %in% "<=02 Months")
+		
+
+		
+
+		#EID 2 months coverage denominator
+		KM_EID2D <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% "Total Denominator")
+		
+
+		
+
+		#EID 12 months coverage numerator
+		KM_EID12N <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% "Total Numerator")
+		
+
+		
+
+		#EID 12 months coverage denominator
+		KM_EID12D <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% "Total Denominator")
+		
+
+		
+
+		#second: create columns in Key Metrics table by population type (including raw numbers here for troubleshooting only)
+		#all pop
+		table_KM_allpop<-KM_allpop %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q3=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            TX_CURR_N_2021_Q1=sum(TX_CURR_N_2021_qtr1,na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		    VLC_FY21_Q3 = TX_PVLS_D_2021_Q3/TX_CURR_N_2021_Q1,
+		    VLS_FY21_Q3 = TX_PVLS_N_2021_Q3/TX_PVLS_D_2021_Q3)
+		
+
+		#LEss than 15
+		table_KM_lessthan15<-KM_lessthan15 %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q3_lt15=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            TX_CURR_N_2021_Q1_lt15=sum(TX_CURR_N_2021_qtr1,na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3_lt15=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		    VLC_FY21_Q3_lt15= TX_PVLS_D_2021_Q3_lt15/TX_CURR_N_2021_Q1_lt15,
+		    VLS_FY21_Q3_lt15 = TX_PVLS_N_2021_Q3_lt15/TX_PVLS_D_2021_Q3_lt15)
+		
+
+		
+
+		#Pregnant 
+		table_KM_PGW<-KM_PGW %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q3_PGW=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            PMTCT_ART_N_2021_Q3_last4qtrs=sum(PMTCT_ART_N_2021_qtr3,PMTCT_ART_N_2021_qtr2, 
+		                                    PMTCT_ART_N_2021_qtr1, PMTCT_ART_N_2020_qtr4, na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3_PGW=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		    VLC_FY21_Q3_PGW = TX_PVLS_D_2021_Q3_PGW/PMTCT_ART_N_2021_Q3_last4qtrs,
+		    VLS_FY21_Q3_PGW = TX_PVLS_N_2021_Q3_PGW/TX_PVLS_D_2021_Q3_PGW)
+		
+
+		
+
+		#Breastfeeding 
+		table_KM_BFW<-KM_BFW %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q3_BFW=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3_BFW=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		       VLS_FY21_Q3_BFW = TX_PVLS_N_2021_Q3_BFW/TX_PVLS_D_2021_Q3_BFW)
+		
+
+		#KP
+		table_KM_KP<-KM_KP %>% 
+		  group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q3_KP=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE),
+		            TX_CURR_N_2021_Q1_KP=sum(TX_CURR_N_2021_qtr1,na.rm = TRUE),
+		            TX_PVLS_N_2021_Q3_KP=sum(TX_PVLS_N_2021_qtr3,na.rm = TRUE))%>%
+		  mutate(
+		    VLC_FY21_Q3_KP = TX_PVLS_D_2021_Q3_KP/TX_CURR_N_2021_Q1_KP,
+		    VLS_FY21_Q3_KP = TX_PVLS_N_2021_Q3_KP/TX_PVLS_D_2021_Q3_KP)
+		
+
+		
+
+		#EID2N
+		table_KM_EID2N<-KM_EID2N %>% 
+		  group_by(operatingunit)%>%
+		  summarize(PMTCT_EID_N_2021_Q3_2M=sum(PMTCT_EID_N_2021_qtr3,na.rm = TRUE))
+		
+
+		#EID2D
+		table_KM_EID2D<-KM_EID2D %>% 
+		  group_by(operatingunit)%>%
+		  summarize(PMTCT_EID_D_2021_Q3_2M=sum(PMTCT_EID_D_2021_qtr3,na.rm = TRUE))
+		
+
+		#EID2T
+		table_KM_EID2T<-full_join(table_KM_EID2N, table_KM_EID2D)
+		
+
+		table_KM_EID2TF<-table_KM_EID2T %>% 
+		  group_by(operatingunit)%>%
+		    mutate(
+		    EID2MoCov_FY21_Q3=PMTCT_EID_N_2021_Q3_2M/PMTCT_EID_D_2021_Q3_2M)
+		
+
+		
+
+		#EID12N
+		table_KM_EID12N<-KM_EID12N %>% 
+		  group_by(operatingunit)%>%
+		  summarize(PMTCT_EID_N_2021_Q3_12M=sum(PMTCT_EID_N_2021_qtr3,na.rm = TRUE))
+		
+
+		#EID12D
+		table_KM_EID12D<-KM_EID12D %>% 
+		  group_by(operatingunit)%>%
+		  summarize(PMTCT_EID_D_2021_Q3_12M=sum(PMTCT_EID_D_2021_qtr3,na.rm = TRUE))
+		
+
+		#EID12T
+		table_KM_EID12T<-full_join(table_KM_EID12N, table_KM_EID12D)
+		
+
+		table_KM_EID12TF<-table_KM_EID12T %>% 
+		  group_by(operatingunit)%>%
+		  mutate(
+		    EID12MoCov_FY21_Q3=PMTCT_EID_N_2021_Q3_12M/PMTCT_EID_D_2021_Q3_12M)
+		
+
+		
+
+		#merge tables (columns needed to make Giant Key Metrics table with columns in final version AND extra columns
+		#containing the values used to make up each calculation for troubleshooting purposes)
+		
+
+		KM_complete1<-full_join(table_KM_allpop, table_KM_lessthan15)
+		
+
+		KM_complete2<-full_join(KM_complete1, table_KM_PGW)
+		
+
+		KM_complete3<-full_join(KM_complete2, table_KM_BFW)
+		
+
+		KM_complete4<-full_join(KM_complete3, table_KM_KP)
+		
+
+		KM_complete5<-full_join(KM_complete4, table_KM_EID2TF)
+		
+
+		KM_complete6<-full_join(KM_complete5, table_KM_EID12TF)
+		
+
+		# write the giant key metrics table for QC potentially. We will print out smaller table (one in data summary table next)
+		#so this table can be printed now in case it is needed for QC, but is not absolutely necessary
+		
+
+		
+
+		#trim Key Metrics Table to final version for data summary
+		KM_complete_trimmed<-KM_complete6%>%
+		  select(c(operatingunit,
+		           VLC_FY21_Q3, VLS_FY21_Q3, 
+		           VLC_FY21_Q3_lt15, VLS_FY21_Q3_lt15, 
+		           VLC_FY21_Q3_PGW, VLS_FY21_Q3_PGW, VLS_FY21_Q3_BFW,
+		           VLC_FY21_Q3_KP, VLS_FY21_Q3_KP,
+		           EID2MoCov_FY21_Q3, EID12MoCov_FY21_Q3)) %>%
+		  rename("Operating Unit" = operatingunit, 
+		         "VLC: All Pop" = VLC_FY21_Q3,
+		         "VLS: All Pop" = VLS_FY21_Q3,
+		         "VLC: <15" = VLC_FY21_Q3_lt15,
+		         "VLS: <15" = VLS_FY21_Q3_lt15,
+		         "VLC: PGW" = VLC_FY21_Q3_PGW,
+		         "VLS: PGW" = VLS_FY21_Q3_PGW,
+		         "VLS: BFW" = VLS_FY21_Q3_BFW,         
+		         "VLC: KP" = VLC_FY21_Q3_KP,
+		         "VLS: KP" = VLS_FY21_Q3_KP,
+		         "EID Cov 2 Mo" = EID2MoCov_FY21_Q3,
+		         "EID Cov 12 Mo" = EID12MoCov_FY21_Q3)
+		
+
+		write.csv(KM_complete_trimmed,"KM_Complete_trimmed_forQC_FY21Q3clean.csv")
+		view(KM_complete_trimmed)
+		
+
+		#Key metrics Heatmap formatting
+		
+
+		#colors needed for Stoplight heatmap
+		indianred<-"#CD5C5C"
+		moccasin<-"#FFE4B5"
+		lightgreen<-"#90EE90"
+		darkseagreen<-"#8FBC8B"
+		lightcoral<-"#F08080"
+		
+
+		#Stoplight Key Metrics Table
+		
+
+		#define shading based on VLC, VLS, and EID thresholds
+		
+
+		# Define color_tile_VLC function
+		color_tile_VLC <- function (...) {
+		  formatter("span", style = function(x) {
+		    style(display = "block",
+		          padding = "0 2px", 
+		          `border-radius` = "2px", 
+		          `background-color` = ifelse(x <.5, lightcoral, ifelse(x >= .8 & x <= .89, lightgreen,
+		                                                               ifelse(x>=.9, darkseagreen, moccasin)))
+		    )})}                                                          
+		
+
+
+		# Define color_tile_VLS function
+		color_tile_VLS <- function (...) {
+		  formatter("span", style = function(x) {
+		    style(display = "block",
+		          padding = "0 2px", 
+		          `border-radius` = "2px", 
+		          `background-color` = ifelse(x <.85,lightcoral, ifelse(x>=.85 & x <=.94, lightgreen,
+		                                                               ifelse(x>=.95,darkseagreen, moccasin)))
+		    )})}                                                          
+		
+
+		
+
+		
+
+		# Define color_tile_EID 2MO function
+		color_tile_EID2Mo <- function (...) {
+		  formatter("span", style = function(x) {
+		    style(display = "block",
+		          padding = "0 2px", 
+		          `border-radius` = "2px", 
+		          `background-color` = ifelse(x <.90,lightcoral, ifelse(x>=.90 & x <=1.1, darkseagreen,lightcoral))
+		    )})}    
+		
+
+		
+
+		# Define color_tile_EID 12MO function
+		color_tile_EID12Mo <- function (...) {
+		  formatter("span", style = function(x) {
+		    style(display = "block",
+		          padding = "0 2px", 
+		          `border-radius` = "2px", 
+		          `background-color` = ifelse(x <.95,lightcoral, ifelse(x>=.95 & x <=1.1, darkseagreen,lightcoral))
+		    )})}    
+		
+
+
+		#change 'INF' and 'NAN' to NA to make table look cleaner
+		KM_complete_trimmed_DT<-data.table(KM_complete_trimmed)
+		invisible(lapply(names(KM_complete_trimmed_DT),function(.name) set(KM_complete_trimmed_DT, which(is.infinite(KM_complete_trimmed_DT[[.name]])), j = .name,value =NA)))
+		invisible(lapply(names(KM_complete_trimmed_DT),function(.name) set(KM_complete_trimmed_DT, which(is.nan(KM_complete_trimmed_DT[[.name]])), j = .name,value =NA)))
+		
+
+		
+
+		#format and produce table
+		formattable(KM_complete_trimmed_DT, 
+		            align =c("l","c","c","c","c", "c", "c", "c", "c", "c", "c", "r"),
+		            list(
+		              `operatingunit` = formatter(
+		                "span", style = ~ style(color = "black",font.weight = "bold")), 
+		              area(col = 2:12) ~ function(y) percent((y)/1,digits=0),
+		              "VLC: All Pop"=color_tile_VLC(),
+		              "VLC: <15"=color_tile_VLC(),
+		              "VLC: PGW"=color_tile_VLC(),
+		              "VLC: KP"=color_tile_VLC(), 
+		              "VLS: All Pop"=color_tile_VLS(),
+		              "VLS: <15"=color_tile_VLS(),
+		              "VLS: PGW"=color_tile_VLS(),
+		              "VLS: BFW"=color_tile_VLS(),
+		              "VLS: KP"=color_tile_VLS(), 
+		              "EID Cov 2 Mo"=color_tile_EID2Mo(),
+		              "EID Cov 12 Mo"=color_tile_EID12Mo()
+		            ))
+	
+		
+
+
+		#*********************Power Bi Visuals
+		
+
+		
+
+		# Power Bi - All Population Bubble Chart Table
+		table_PBI_allpop<-table_KM_allpop%>%
+		  select(c(operatingunit,
+		           VLC_FY21_Q3, VLS_FY21_Q3, 
+		           TX_PVLS_D_2021_Q3,TX_CURR_N_2021_Q1)) %>%
+		
+
+		  mutate(Quadrant = case_when(VLC_FY21_Q3 >= .8 & VLS_FY21_Q3 >= .95 ~ 1,
+		                              VLC_FY21_Q3 >= .8 & VLS_FY21_Q3 < .95 ~ 2,
+		                              VLC_FY21_Q3 < .8 & VLS_FY21_Q3 >= .95 ~ 3,
+		                              VLC_FY21_Q3 < .8 & VLS_FY21_Q3 < .95 ~ 4)) %>%
+		
+
+		  rename("Operating Unit" = operatingunit, 
+		       "VLC: All Pop" = VLC_FY21_Q3,
+		       "VLS: All Pop" = VLS_FY21_Q3,
+		       "Patients with a Documented VL" = TX_PVLS_D_2021_Q3,
+		       "Patients Eligible for VL" = TX_CURR_N_2021_Q1)
+		
+
+		
+
+		write.csv(table_PBI_allpop,"PBI_Bubble_AllPOP_FY21Q3clean.csv")
+		view(table_PBI_allpop)
+		
+
+		
+
+	
+		
+
+		# Power Bi - <15 Bubble Chart Table
+		table_PBI_lessthan15<-table_KM_lessthan15%>%
+		  select(c(operatingunit,
+		           VLC_FY21_Q3_lt15, VLS_FY21_Q3_lt15,
+		           TX_PVLS_D_2021_Q3_lt15,TX_CURR_N_2021_Q1_lt15))%>%
+		
+
+		  mutate(Quadrant = case_when(VLC_FY21_Q3_lt15 >= .8 & VLS_FY21_Q3_lt15 >= .95 ~ 1,
+		                              VLC_FY21_Q3_lt15 >= .8 & VLS_FY21_Q3_lt15 < .95 ~ 2,
+		                              VLC_FY21_Q3_lt15 < .8 & VLS_FY21_Q3_lt15 >= .95 ~ 3,
+		                              VLC_FY21_Q3_lt15 < .8 & VLS_FY21_Q3_lt15 < .95 ~ 4)) %>%
+		
+
+		  rename("Operating Unit" = operatingunit, 
+		         "VLC: LT15" = VLC_FY21_Q3_lt15,
+		         "VLS: LT15" = VLS_FY21_Q3_lt15,
+		         "Patients with a Documented VL, <15" = TX_PVLS_D_2021_Q3_lt15,
+		         "Patients Eligible for VL, <15" = TX_CURR_N_2021_Q1_lt15)
+		
+
+		write.csv(table_PBI_lessthan15,"PBI_Bubble_Lessthan15_FY21Q3clean.csv")
+		view(table_PBI_lessthan15)
+		
+
+		# Power Bi - Early Warning Sign <1 VLC
+		
+
+		#lessthan1 VL
+		KM_lessthan1 <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/Indication/HIVStatus", "Age Aggregated/Sex/Indication/HIVStatus",
+		                                         "Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"),
+		         ageasentered %in% "<01")
+		
+
+		table_KM_lessthan1 <- KM_lessthan1 %>%
+		group_by(operatingunit)%>%
+		  summarize(TX_PVLS_D_2021_Q3_lt1=sum(TX_PVLS_D_2021_qtr3,na.rm = TRUE))
+		
+
+		PMTCT_HEI_POS_ART_N_lt2mo <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/HIVStatus/ARTStatus"),
+		         ageasentered %in% "<=02 Months")
+		
+
+		table_PMTCT_HEI_POS_ART_N_lt2mo<-PMTCT_HEI_POS_ART_N_lt2mo %>%
+		group_by(operatingunit)%>%
+		  summarize(PMTCT_HEI_POS_N_lastyear_2qtrsago=sum(PMTCT_HEI_POS_N_2021_qtr1,PMTCT_HEI_POS_N_2020_qtr4, PMTCT_HEI_POS_N_2020_qtr3,
+		                                                  PMTCT_HEI_POS_N_2020_qtr2, na.rm = TRUE))
+		
+
+		table_ewsvlclt1 <- full_join(table_KM_lessthan1, table_PMTCT_HEI_POS_ART_N_lt2mo)%>%
+		  mutate(
+		    EWS_VLC_LT1=TX_PVLS_D_2021_Q3_lt1/PMTCT_HEI_POS_N_lastyear_2qtrsago, 
+		    EWS_VLC_LT1_target = ifelse(TX_PVLS_D_2021_Q3_lt1 >= 0, 1, 1))%>%
+		
+
+		  rename("Operating Unit" = operatingunit, 
+		         "<1 EWS VLC" = EWS_VLC_LT1,
+		         "<1 EWS VLC Target" = EWS_VLC_LT1_target,
+		         "<=2 Mo HEI ART" = PMTCT_HEI_POS_N_lastyear_2qtrsago,
+		         "<1 Patients with Documented VL" = TX_PVLS_D_2021_Q3_lt1)
+		
+
+		write.csv(table_ewsvlclt1,"PBI_EWS_Lessthan1_FY21Q3clean.csv")
+		view(table_ewsvlclt1)
+		
+
+
+		# Power Bi - VL Testing Demand 
+		
+
+		table_PBI_VLtestingdemand_1<-table_KM_allpop%>%
+		  select(c(operatingunit,
+		           VLC_FY21_Q3, 
+		           TX_PVLS_D_2021_Q3,TX_CURR_N_2021_Q1)) %>%
+		
+
+		  mutate(
+		    VL_Testing_Gap_FY21_Q3 = TX_CURR_N_2021_Q1 - TX_PVLS_D_2021_Q3) %>%
+		
+
+		
+
+		  rename("Operating Unit" = operatingunit, 
+		         "VL Coverage" = VLC_FY21_Q3,
+		         "Eligible Patients with no VL" = VL_Testing_Gap_FY21_Q3)
+		
+
+		
+
+		table_PBI_VLtestingdemand_2 <- DF3_finalb %>%
+		  filter(standardizeddisaggregate %in% c("Age/Sex/HIVStatus", "Age Aggregated/Sex/HIVStatus"))%>%
+		  group_by(operatingunit)%>%
+		  summarize(TX_NET_NEW_N_2021_Q2=sum(TX_NET_NEW_N_2021_qtr2,na.rm = TRUE))%>%
+		  rename("Operating Unit" = operatingunit, 
+		         "Patients Newly Eligible for VL" = TX_NET_NEW_N_2021_Q2)
+		
+
+	
+		table_PBI_VLtestingdemand_complete<-full_join(table_PBI_VLtestingdemand_1, table_PBI_VLtestingdemand_2)
+		
+		
+
+		write.csv(table_PBI_VLtestingdemand_complete,"PBI_Testing_Demand_FY21Q3clean.csv")
+
